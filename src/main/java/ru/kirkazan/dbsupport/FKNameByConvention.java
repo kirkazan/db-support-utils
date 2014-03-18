@@ -20,8 +20,10 @@ public class FKNameByConvention
     private static Connection connection;
     private static Map<String, FK> fks;
     private static Map<String, FK> dependencies = new HashMap<String, FK>();
-    private static Set<String> added = new HashSet<String>();
-    private static Set<String> dropped = new HashSet<String>();
+    private static int renamed = 0;
+    private static int dropped = 0;
+    private static int untouched = 0;
+    private static int waiting = 0;
 
     public static void main(String[] args)
     {
@@ -42,7 +44,7 @@ public class FKNameByConvention
 
             for (FK fk : fks.values())
             {
-                process(fk, 1);
+                process(fk);
             }
         }
         catch (SQLException e)
@@ -63,79 +65,77 @@ public class FKNameByConvention
                 logger.error("Error at finally", e);
             }
         }
+
+        logger.info("");
+        logger.info("TOTAL:");
+        logger.info("    Untouched: {}", untouched);
+        logger.info("    Renamed: {}", renamed);
+        if (dropDuplicated)
+            logger.info("    Dropped: {}", dropped);
+        else
+            logger.info("    To drop: {}", dropped);
+        logger.info("    Wainting: {}", waiting - dropped);
+
     }
 
-    private static void process(FK fk, int recursionLevel) throws SQLException
+    private static void process(FK fk) throws SQLException
     {
 
-        String indent = getIndent(recursionLevel);
-        logger.info("{}fk {}", getIndent(recursionLevel - 1), fk.getId());
+        logger.info("fk {}", fk.getId());
 
         if (fk.isConvenientName())
         {
-            logger.info("{}already has convenient name", indent, fk.name);
+            logger.info("    already has convenient name", fk.name);
+            untouched++;
             if (dependencies.containsKey(fk.name))
             {
                 FK dfk = dependencies.get(fk.name);
-                logger.info("{}dependent fk {} should be dropped as duplicated, compare:", indent, dfk.getId());
-                String indentPlus = getIndent(recursionLevel + 1);
-                logger.info("{}name\t\t\t{}\t{}", indentPlus, fk.name, dfk.name);
-                logger.info("{}from table\t{}\t{}", indentPlus, fk.fromTable, dfk.fromTable);
-                logger.info("{}from column\t{}\t{}", indentPlus, fk.fromColumn, dfk.fromColumn);
-                logger.info("{}to table\t\t{}\t{}", indentPlus, fk.toTable, dfk.toTable);
-                logger.info("{}to column\t\t{}\t{}", indentPlus, fk.toColumn, dfk.toColumn);
-                logger.info("{}match type\t{}\t{}", indentPlus, fk.matchType, dfk.matchType);
-                logger.info("{}on update\t\t{}\t{}", indentPlus, fk.onUpdate, dfk.onUpdate);
-                logger.info("{}on create\t\t{}\t{}", indentPlus, fk.onDelete, dfk.onDelete);
+                logger.info("    dependent fk {} should be dropped as duplicated, compare:", dfk.getId());
+                logger.info("        name\t\t\t{}\t{}", fk.name, dfk.name);
+                logger.info("        from table\t\t{}\t{}", fk.fromTable, dfk.fromTable);
+                logger.info("        from column\t{}\t{}", fk.fromColumn, dfk.fromColumn);
+                logger.info("        to table\t\t{}\t{}", fk.toTable, dfk.toTable);
+                logger.info("        to column\t\t{}\t{}", fk.toColumn, dfk.toColumn);
+                logger.info("        match type\t\t{}\t{}", fk.matchType, dfk.matchType);
+                logger.info("        on update\t\t{}\t{}", fk.onUpdate, dfk.onUpdate);
+                logger.info("        on create\t\t{}\t{}", fk.onDelete, dfk.onDelete);
 
                 if (dropDuplicated)
                 {
-                    logger.info("{}fk {} will be dropped",  indentPlus, dfk.getId());
+                    logger.info("    fk {} will be dropped", dfk.getId());
                     drop(dfk);
-                    dropped.add(dfk.name);
-                    added.remove(dfk.name);
-                    logger.info("{}possible dependencies", indentPlus);
-                    if (dependencies.containsKey(dfk.getConvenientName()))
-                        process(dependencies.get(dfk.getConvenientName()), recursionLevel + 1);
+                    logger.info("    try to commit");
+                    connection.commit();
                 }
                 else
                 {
-                    logger.info("{}use -dropDuplicated for auto drop or use next ddl:", indentPlus);
-                    logger.info("{}{}",indentPlus, MessageFormat.format(DROP_CONSTRAINT_QUERY_TEMPLATE, dfk.fromTable, dfk.name));
+                    logger.info("    use -dropDuplicated for auto drop or use next ddl:");
+                    logger.info("    {}", MessageFormat.format(DROP_CONSTRAINT_QUERY_TEMPLATE, dfk.fromTable, dfk.name));
                 }
+                dropped++;
             }
             return;
         }
 
         String convenientName = fk.getConvenientName();
-        if ((fks.containsKey(fk.getConvenientId()) && !dropped.contains(convenientName)) || added.contains(convenientName))
+        if (fks.containsKey(fk.getConvenientId()))
         {
-            logger.info("{}will be renamed after {}", indent, convenientName);
+            logger.info("    will be renamed after {}", convenientName);
             dependencies.put(convenientName, fk);
+            waiting++;
             return;
         }
 
-        logger.info("{}will be dropped",  indent);
+        logger.info("    will be dropped");
         drop(fk);
-        dropped.add(fk.name);
-        added.remove(fk.name);
 
-        logger.info("{}will be added with name {}", indent, convenientName);
+        logger.info("    will be added with name {}", convenientName);
         addWithConvenientName(fk);
-        added.add(convenientName);
-        dropped.remove(convenientName);
 
-        logger.info("{}try to commit", indent);
+        renamed++;
+
+        logger.info("    try to commit");
         connection.commit();
-
-        if (dependencies.containsKey(fk.name))
-        {
-            FK dfk = dependencies.get(fk.name);
-            logger.info("{}dependent fk {} will be renamed", indent, dfk.name);
-            process(dfk, recursionLevel + 1);
-        }
-
-
     }
 
     public static final String ADD_CONSTRAINT_QUERY_TEMPLATE =
@@ -159,7 +159,7 @@ public class FKNameByConvention
                     fk.onDelete
             );
             if (showSQL)
-                logger.debug(query);
+                logger.debug("    sql: {}",query);
             addStatement.execute(query);
         }
         finally
@@ -179,7 +179,7 @@ public class FKNameByConvention
             dropStatement = connection.createStatement();
             String query = MessageFormat.format(DROP_CONSTRAINT_QUERY_TEMPLATE, fk.fromTable, fk.name);
             if (showSQL)
-                logger.debug(query);
+                logger.debug("    sql: {}",query);
             dropStatement.execute(query);
         }
         finally
@@ -187,18 +187,6 @@ public class FKNameByConvention
             if (dropStatement != null)
                 dropStatement.close();
         }
-    }
-
-    public static final String ONE_LEVEL_INDENT = "    ";
-    private static String getIndent(int recursionLevel)
-    {
-        StringBuilder indent = new StringBuilder((recursionLevel + 1) * ONE_LEVEL_INDENT.length());
-
-        for (int i = 0 ; i < recursionLevel; i++)
-        {
-            indent.append(ONE_LEVEL_INDENT);
-        }
-        return indent.toString();
     }
 
     private static CommandLine cl;
