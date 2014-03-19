@@ -265,13 +265,14 @@ public class FKNameByConvention
         POSTGRES_ACTION_MAP.put("d", "SET DEFAULT");
     }
 
-    private static final Map<String, String> POSTGRES_MATCH_TYPE_MAP = new HashMap<String, String>(3);
+    private static final Map<String, String> POSTGRES_MATCH_TYPE_MAP = new HashMap<String, String>(4);
 
     static
     {
         POSTGRES_MATCH_TYPE_MAP.put("f", "FULL");
         POSTGRES_MATCH_TYPE_MAP.put("p", "PARTIAL");
         POSTGRES_MATCH_TYPE_MAP.put("s", "SIMPLE");
+        POSTGRES_MATCH_TYPE_MAP.put("u", "SIMPLE");
     }
 
     private static final String FKS_QUERY = "" +
