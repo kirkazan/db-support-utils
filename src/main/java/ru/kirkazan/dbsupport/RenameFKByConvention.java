@@ -12,7 +12,7 @@ import java.util.*;
  * @author esadykov
  * @since 11.03.14 23:41
  */
-public class FKNameByConvention
+public class RenameFKByConvention
 {
     private static Logger logger = LoggerFactory.getLogger("main");
     private static boolean dropDuplicated = false;
@@ -24,6 +24,7 @@ public class FKNameByConvention
     private static int dropped = 0;
     private static int untouched = 0;
     private static int waiting = 0;
+    private static int failed = 0;
 
     public static void main(String[] args)
     {
@@ -66,6 +67,14 @@ public class FKNameByConvention
             }
         }
 
+        logger.info("POSSIBLE DUPLICATED:");
+        for (String fkId : dependencies.keySet())
+        {
+            FK dfk = dependencies.get(fkId);
+            showComparison(fks.get(fkId), dfk);
+            logger.info("    {}", MessageFormat.format(DROP_CONSTRAINT_QUERY_TEMPLATE, dfk.fromTable, dfk.name));
+            logger.info("");
+        }
         logger.info("");
         logger.info("TOTAL:");
         logger.info("    Untouched: {}", untouched);
@@ -74,7 +83,8 @@ public class FKNameByConvention
             logger.info("    Dropped: {}", dropped);
         else
             logger.info("    To drop: {}", dropped);
-        logger.info("    Wainting: {}", waiting - dropped);
+        logger.info("    Wainting: {}", waiting);
+        logger.info("    Failed: {}", failed);
 
     }
 
@@ -87,32 +97,26 @@ public class FKNameByConvention
         {
             logger.info("    already has convenient name", fk.name);
             untouched++;
-            if (dependencies.containsKey(fk.name))
+            if (dependencies.containsKey(fk.getId()))
             {
-                FK dfk = dependencies.get(fk.name);
-                logger.info("    dependent fk {} should be dropped as duplicated, compare:", dfk.getId());
-                logger.info("        name\t\t\t{}\t{}", fk.name, dfk.name);
-                logger.info("        from table\t\t{}\t{}", fk.fromTable, dfk.fromTable);
-                logger.info("        from column\t{}\t{}", fk.fromColumn, dfk.fromColumn);
-                logger.info("        to table\t\t{}\t{}", fk.toTable, dfk.toTable);
-                logger.info("        to column\t\t{}\t{}", fk.toColumn, dfk.toColumn);
-                logger.info("        match type\t\t{}\t{}", fk.matchType, dfk.matchType);
-                logger.info("        on update\t\t{}\t{}", fk.onUpdate, dfk.onUpdate);
-                logger.info("        on create\t\t{}\t{}", fk.onDelete, dfk.onDelete);
+                FK dfk = dependencies.get(fk.getId());
+                showComparison(fk, dfk);
 
                 if (dropDuplicated)
                 {
                     logger.info("    fk {} will be dropped", dfk.getId());
                     drop(dfk);
+                    dependencies.remove(fk.getId());
                     logger.info("    try to commit");
                     connection.commit();
+                    dropped++;
+                    waiting--;
                 }
                 else
                 {
                     logger.info("    use -dropDuplicated for auto drop or use next ddl:");
                     logger.info("    {}", MessageFormat.format(DROP_CONSTRAINT_QUERY_TEMPLATE, dfk.fromTable, dfk.name));
                 }
-                dropped++;
             }
             return;
         }
@@ -121,21 +125,43 @@ public class FKNameByConvention
         if (fks.containsKey(fk.getConvenientId()))
         {
             logger.info("    will be renamed after {}", convenientName);
-            dependencies.put(convenientName, fk);
+            dependencies.put(fk.getConvenientId(), fk);
             waiting++;
             return;
         }
 
-        logger.info("    will be dropped");
-        drop(fk);
+        try
+        {
+            logger.info("    will be dropped");
+            drop(fk);
 
-        logger.info("    will be added with name {}", convenientName);
-        addWithConvenientName(fk);
+            logger.info("    will be added with name {}", convenientName);
+            addWithConvenientName(fk);
 
-        renamed++;
+            renamed++;
 
-        logger.info("    try to commit");
-        connection.commit();
+            logger.info("    try to commit");
+            connection.commit();
+        }
+        catch (SQLException e)
+        {
+            failed++;
+            logger.error(e.getMessage());
+            connection.rollback();
+        }
+    }
+
+    private static void showComparison(FK fk, FK dfk)
+    {
+        logger.info("    dependent fk {} should be dropped as duplicated, compare:", dfk.getId());
+        logger.info("        name\t\t\t{}\t{}", fk.name, dfk.name);
+        logger.info("        from table\t\t{}\t{}", fk.fromTable, dfk.fromTable);
+        logger.info("        from column\t{}\t{}", fk.fromColumn, dfk.fromColumn);
+        logger.info("        to table\t\t{}\t{}", fk.toTable, dfk.toTable);
+        logger.info("        to column\t\t{}\t{}", fk.toColumn, dfk.toColumn);
+        logger.info("        match type\t\t{}\t{}", fk.matchType, dfk.matchType);
+        logger.info("        on update\t\t{}\t{}", fk.onUpdate, dfk.onUpdate);
+        logger.info("        on create\t\t{}\t{}", fk.onDelete, dfk.onDelete);
     }
 
     public static final String ADD_CONSTRAINT_QUERY_TEMPLATE =
@@ -206,7 +232,7 @@ public class FKNameByConvention
         {
             System.out.println(e.getMessage());
             HelpFormatter hf = new HelpFormatter();
-            hf.printHelp(FKNameByConvention.class.getName(), options);
+            hf.printHelp(RenameFKByConvention.class.getName(), options);
             return null;
         }
     }
@@ -222,7 +248,7 @@ public class FKNameByConvention
         {
             System.out.println(e.getMessage());
             HelpFormatter hf = new HelpFormatter();
-            hf.printHelp(FKNameByConvention.class.getName(), options);
+            hf.printHelp(RenameFKByConvention.class.getName(), options);
         }
 
         dropDuplicated = cl.hasOption("-dropDuplicated");
